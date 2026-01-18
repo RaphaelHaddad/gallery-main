@@ -40,6 +40,10 @@ import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.SamplerConfig
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 private const val TAG = "AGLlmChatModelHelper"
 
@@ -225,46 +229,75 @@ object LlmChatModelHelper {
 
     val conversation = instance.conversation
 
-    val contents = mutableListOf<Content>()
-    for (image in images) {
-      // Optimize: resize and use JPEG for faster processing
-      contents.add(Content.ImageBytes(image.optimizedToByteArray()))
-    }
-    for (audioClip in audioClips) {
-      contents.add(Content.AudioBytes(audioClip))
-    }
-    // add the text after image and audio for the accurate last token
-    if (input.trim().isNotEmpty()) {
-      contents.add(Content.Text(input))
-    }
+    // Use runBlocking to process images in parallel, then send message
+    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+      try {
+        // Process images in parallel (Tier 2.1 optimization)
+        val imageContents = preprocessImagesParallel(images)
 
-    conversation.sendMessageAsync(
-      Message.of(contents),
-      object : MessageCallback {
-        override fun onMessage(message: Message) {
-          resultListener(message.toString(), false)
+        val contents = mutableListOf<Content>()
+
+        // Add processed images
+        contents.addAll(imageContents)
+
+        // Add audio clips
+        for (audioClip in audioClips) {
+          contents.add(Content.AudioBytes(audioClip))
         }
 
-        override fun onDone() {
-          resultListener("", true)
+        // add the text after image and audio for the accurate last token
+        if (input.trim().isNotEmpty()) {
+          contents.add(Content.Text(input))
         }
 
-        override fun onError(throwable: Throwable) {
-          if (throwable is CancellationException) {
-            Log.i(TAG, "The inference is cancelled.")
-            resultListener("", true)
-          } else {
-            Log.e(TAG, "onError", throwable)
-            onError("Error: ${throwable.message}")
-          }
-        }
-      },
-    )
+        // Send the message
+        conversation.sendMessageAsync(
+          Message.of(contents),
+          object : MessageCallback {
+            override fun onMessage(message: Message) {
+              resultListener(message.toString(), false)
+            }
+
+            override fun onDone() {
+              resultListener("", true)
+            }
+
+            override fun onError(throwable: Throwable) {
+              if (throwable is CancellationException) {
+                Log.i(TAG, "The inference is cancelled.")
+                resultListener("", true)
+              } else {
+                Log.e(TAG, "onError", throwable)
+                onError("Error: ${throwable.message}")
+              }
+            }
+          },
+        )
+      } catch (e: Exception) {
+        Log.e(TAG, "Error preprocessing images", e)
+        onError("Error preprocessing images: ${e.message}")
+      }
+    }
   }
 
   // Constants for image optimization
   private const val MAX_IMAGE_SIZE = 512
   private const val JPEG_QUALITY = 85
+
+  /**
+   * Tier 2.1: Parallel Image Preprocessing
+   *
+   * Process multiple images in parallel using coroutines to reduce preprocessing time.
+   * Expected speedup: 2-3x for preprocessing on multi-core devices.
+   */
+  private suspend fun preprocessImagesParallel(images: List<Bitmap>): List<Content.ImageBytes> =
+    coroutineScope {
+      images.map { bitmap ->
+        async(Dispatchers.Default) {
+          Content.ImageBytes(bitmap.optimizedToByteArray())
+        }
+      }.awaitAll()
+    }
 
   /**
    * Optimized image conversion: resize + JPEG encoding
