@@ -801,6 +801,51 @@ constructor(
           }
         }
 
+        // Re-add imported models from DataStore to tasks.
+        val importedModels = dataStoreRepository.readImportedModels()
+        for (importedModelInfo in importedModels) {
+          val model = createModelFromImportedModelInfo(importedModelInfo)
+          for (task in curTasks.filter { taskInfo ->
+            taskInfo.id in listOf(
+              BuiltInTaskId.LLM_CHAT,
+              BuiltInTaskId.LLM_ASK_IMAGE,
+              BuiltInTaskId.LLM_ASK_AUDIO,
+              BuiltInTaskId.LLM_PROMPT_LAB,
+              BuiltInTaskId.LLM_TINY_GARDEN,
+              BuiltInTaskId.LLM_MOBILE_ACTIONS,
+              "llm_server",
+            )
+          }) {
+            // Remove duplicated imported model if existed.
+            val modelIndex = task.models.indexOfFirst { importedModelInfo.fileName == it.name && it.imported }
+            if (modelIndex >= 0) {
+              Log.d(TAG, "duplicated imported model found in task. Removing it first")
+              task.models.removeAt(modelIndex)
+            }
+            if (
+              (task.id == BuiltInTaskId.LLM_ASK_IMAGE && model.llmSupportImage) ||
+                (task.id == BuiltInTaskId.LLM_ASK_AUDIO && model.llmSupportAudio) ||
+                (task.id == BuiltInTaskId.LLM_TINY_GARDEN && model.llmSupportTinyGarden) ||
+                (task.id == BuiltInTaskId.LLM_MOBILE_ACTIONS && model.llmSupportMobileActions) ||
+                (task.id == "llm_server" && model.llmSupportImage) ||
+                (task.id != BuiltInTaskId.LLM_ASK_IMAGE &&
+                  task.id != BuiltInTaskId.LLM_ASK_AUDIO &&
+                  task.id != BuiltInTaskId.LLM_TINY_GARDEN &&
+                  task.id != BuiltInTaskId.LLM_MOBILE_ACTIONS &&
+                  task.id != "llm_server")
+            ) {
+              task.models.add(model)
+              if (task.id == BuiltInTaskId.LLM_TINY_GARDEN) {
+                val newConfigs = model.configs.toMutableList()
+                newConfigs.add(RESET_CONVERSATION_TURN_COUNT_CONFIG)
+                model.configs = newConfigs
+                model.preProcess()
+              }
+            }
+            task.updateTrigger.value = System.currentTimeMillis()
+          }
+        }
+
         // Process all tasks.
         processTasks()
 
