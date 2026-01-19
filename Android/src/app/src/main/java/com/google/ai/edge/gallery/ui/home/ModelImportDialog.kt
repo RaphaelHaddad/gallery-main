@@ -130,7 +130,7 @@ private val IMPORT_CONFIGS_LLM: List<Config> =
     SegmentedButtonConfig(
       key = ConfigKeys.COMPATIBLE_ACCELERATORS,
       defaultValue = Accelerator.CPU.label,
-      options = listOf(Accelerator.CPU.label, Accelerator.GPU.label),
+      options = listOf(Accelerator.CPU.label, Accelerator.GPU.label, Accelerator.NPU.label),
       allowMultiple = true,
     ),
   )

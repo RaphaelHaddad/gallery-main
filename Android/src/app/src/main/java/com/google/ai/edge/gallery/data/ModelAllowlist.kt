@@ -74,6 +74,8 @@ data class AllowedModel(
             accelerators.add(Accelerator.CPU)
           } else if (item == "gpu") {
             accelerators.add(Accelerator.GPU)
+          } else if (item == "npu") {
+            accelerators.add(Accelerator.NPU)
           }
         }
       }

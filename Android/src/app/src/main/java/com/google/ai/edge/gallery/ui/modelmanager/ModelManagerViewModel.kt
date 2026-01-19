@@ -999,6 +999,7 @@ constructor(
         when (acceleratorLabel.trim()) {
           Accelerator.GPU.label -> Accelerator.GPU
           Accelerator.CPU.label -> Accelerator.CPU
+          Accelerator.NPU.label -> Accelerator.NPU
           else -> null // Ignore unknown accelerator labels
         }
       }

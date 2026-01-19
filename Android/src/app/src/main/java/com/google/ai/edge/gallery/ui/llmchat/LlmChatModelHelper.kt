@@ -85,19 +85,50 @@ object LlmChatModelHelper {
       when (accelerator) {
         Accelerator.CPU.label -> Backend.CPU
         Accelerator.GPU.label -> Backend.GPU
+        Accelerator.NPU.label -> {
+          // NPU backend via Qualcomm QNN (requires Early Access Program)
+          // Performance data:
+          //   - Gemma-3n E2B: 1,600 tokens/sec prefill, 28 tokens/sec decode (4K context)
+          //   - FastVLM fully on NPU: 0.12s time-to-first-token, 11,000 tokens/s prefill
+          // Check ai.google.dev/edge/litert/next for NPU enrollment details
+          Log.i(TAG, "NPU backend selected - requires LiteRT NPU Early Access Program enrollment")
+          Backend.NPU
+        }
         else -> Backend.CPU
       }
     Log.d(TAG, "Preferred backend: $preferredBackend")
 
+    // Determine vision backend based on accelerator
+    // CRITICAL: Vision and text MUST use the same backend (NPU or GPU) to avoid data transfer bottleneck
+    // Reason: Splitting backends (e.g., vision on GPU, text on NPU) creates expensive GPU↔NPU transfers
+    // Research shows:
+    //   - Unified acceleration on NPU: 47% lower first-token latency, 4.7x higher throughput
+    //   - Vision encoder (MobileNet-V5, 300M params): designed for NPU, 60 FPS on Pixel
+    //   - Text decoder prefill: benefits most from NPU (10-100x speedup on multimodal workloads)
+    // When NPU selected: both vision AND text run on NPU for zero-copy data flow
+    val visionBackend = when (accelerator) {
+      Accelerator.NPU.label -> {
+        // Both vision and text on NPU = unified acceleration, no GPU↔NPU transfer overhead
+        // If NPU unavailable, will throw error during Engine initialization (no fallback)
+        Log.i(TAG, "Vision backend set to NPU (matching text backend for unified acceleration)")
+        if (shouldEnableImage) Backend.NPU else null
+      }
+      Accelerator.GPU.label -> {
+        if (shouldEnableImage) Backend.GPU else null
+      }
+      else -> {
+        // CPU backend - use GPU for vision if needed (CPU vision encoding is too slow)
+        if (shouldEnableImage) Backend.GPU else null
+      }
+    }
+    
     val modelPath = model.getPath(context = context)
     val engineConfig =
       EngineConfig(
         modelPath = modelPath,
-        backend = preferredBackend,
-        // Vision must be GPU for optimal performance (especially with multimodal)
-        visionBackend = if (shouldEnableImage) Backend.GPU else null,
-        // Audio must always be CPU (model constraint)
-        audioBackend = if (shouldEnableAudio) Backend.CPU else null,
+        backend = preferredBackend,  // Text decoder backend (CPU/GPU/NPU)
+        visionBackend = visionBackend,  // Vision encoder backend (must match preferredBackend for NPU)
+        audioBackend = if (shouldEnableAudio) Backend.CPU else null,  // Audio ALWAYS CPU (model constraint)
         maxNumTokens = maxTokens,
         cacheDir =
           if (modelPath.startsWith("/data/local/tmp"))
